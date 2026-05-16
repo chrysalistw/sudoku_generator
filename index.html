@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>數獨生成器</title>
+  <style>
+    :root {
+      --cell-size: min(9vw, 9vh, 58px);
+      --border-thin: 1px solid #aaa;
+      --border-thick: 3px solid #111;
+      --font-cell: calc(var(--cell-size) * 0.54);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #eef2f7;
+      min-height: 100vh;
+    }
+
+    /* ── Controls ── */
+    .controls {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 20px;
+      background: #fff;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+    }
+
+    .controls h1 {
+      font-size: 1.5rem;
+      color: #1e293b;
+      letter-spacing: 0.04em;
+    }
+
+    .control-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    select {
+      padding: 8px 14px;
+      font-size: 0.95rem;
+      border: 1.5px solid #cbd5e1;
+      border-radius: 6px;
+      background: #fff;
+      cursor: pointer;
+      color: #334155;
+    }
+
+    button {
+      padding: 8px 18px;
+      font-size: 0.95rem;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background 0.15s, transform 0.1s;
+    }
+    button:active { transform: scale(0.97); }
+
+    #btn-generate { background: #2563eb; color: #fff; }
+    #btn-generate:hover { background: #1d4ed8; }
+    #btn-generate:disabled { background: #93c5fd; cursor: not-allowed; }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #btn-clear { background: #e2e8f0; color: #475569; }
+    #btn-clear:hover { background: #cbd5e1; }
+
+    #btn-print { background: #0f766e; color: #fff; }
+    #btn-print:hover { background: #0d9488; }
+
+    /* ── Puzzle area ── */
+    #puzzle-area {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 28px;
+      padding: 28px 16px;
+    }
+
+    .puzzle-page {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      background: #fff;
+      border-radius: 10px;
+      padding: 24px;
+      box-shadow: 0 2px 14px rgba(0,0,0,0.1);
+      width: fit-content;
+    }
+
+    /* difficulty badge on screen */
+    .difficulty-badge {
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 3px 10px;
+      border-radius: 999px;
+      color: #fff;
+    }
+    .diff-easy    { background: #16a34a; }
+    .diff-medium  { background: #2563eb; }
+    .diff-hard    { background: #ea580c; }
+    .diff-expert  { background: #9333ea; }
+    .diff-master  { background: #be123c; }
+
+    /* ── Sudoku Grid ── */
+    .sudoku-grid {
+      display: grid;
+      grid-template-columns: repeat(9, var(--cell-size));
+      grid-template-rows: repeat(9, var(--cell-size));
+      border: var(--border-thick);
+      width: fit-content;
+    }
+
+    .cell {
+      width: var(--cell-size);
+      height: var(--cell-size);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: var(--font-cell);
+      font-weight: 700;
+      border-right: var(--border-thin);
+      border-bottom: var(--border-thin);
+      color: transparent;
+      user-select: none;
+    }
+
+    .cell.given { color: #1a1a1a; }
+
+    /* remove double-borders at grid edges */
+    .cell:nth-child(9n)      { border-right: none; }
+    .cell:nth-child(n+73)    { border-bottom: none; }
+
+    /* thick right border after columns 3 and 6 */
+    .cell:nth-child(9n+3)    { border-right: var(--border-thick); }
+    .cell:nth-child(9n+6)    { border-right: var(--border-thick); }
+
+    /* thick bottom border after rows 3 and 6 */
+    .cell:nth-child(n+19):nth-child(-n+27) { border-bottom: var(--border-thick); }
+    .cell:nth-child(n+46):nth-child(-n+54) { border-bottom: var(--border-thick); }
+
+  </style>
+</head>
+<body>
+
+<header class="controls">
+  <h1>數獨生成器</h1>
+  <div class="control-row">
+    <select id="difficulty">
+      <option value="easy">簡單</option>
+      <option value="medium" selected>中等</option>
+      <option value="hard">困難</option>
+    </select>
+    <button id="btn-generate">生成數獨</button>
+    <button id="btn-print">列印</button>
+  </div>
+</header>
+
+<main id="puzzle-area"></main>
+
+<script type="module">
+  const difficultyLabels = {
+    easy: '簡單', medium: '中等', hard: '困難', expert: '專家', master: '大師'
+  };
+
+  // Current board state for printing
+  let currentBoard = null;
+  let currentDifficulty = null;
+
+  // ── Web Worker (runs generate() off the main thread) ──
+  const workerSrc = `
+    import { generate } from 'https://esm.sh/sudoku-core@3.0.3';
+    self.onmessage = (e) => {
+      try {
+        const board = generate(e.data.difficulty);
+        self.postMessage({ board, difficulty: e.data.difficulty });
+      } catch (err) {
+        self.postMessage({ error: err.message });
+      }
+    };
+  `;
+  const worker = new Worker(
+    URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' })),
+    { type: 'module' }
+  );
+
+  const btnGenerate = document.getElementById('btn-generate');
+  let pending = null;
+
+  function setLoading(on) {
+    btnGenerate.disabled = on;
+    btnGenerate.innerHTML = on
+      ? '<span class="spinner"></span>生成中…'
+      : '生成數獨';
+  }
+
+  // ── Screen rendering ──
+  function buildPuzzleCard(board, difficulty) {
+    const page = document.createElement('div');
+    page.className = 'puzzle-page';
+
+    const badge = document.createElement('span');
+    badge.className = `difficulty-badge diff-${difficulty}`;
+    badge.textContent = difficultyLabels[difficulty];
+
+    const grid = document.createElement('div');
+    grid.className = 'sudoku-grid';
+    for (let i = 0; i < 81; i++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      if (board[i] !== null) {
+        cell.classList.add('given');
+        cell.textContent = board[i];
+      }
+      grid.appendChild(cell);
+    }
+
+    page.appendChild(badge);
+    page.appendChild(grid);
+    return page;
+  }
+
+  // ── Canvas rendering for print ──
+  function drawSudokuToCanvas(board) {
+    const CELL = 64;          // px per cell
+    const THIN = 1;
+    const THICK = 3;
+    const N = 9;
+    // Total size: outer border (thick/2 on each side) + 9 cells + 8 inner lines
+    // We draw lines at positions 0, CELL, 2*CELL ... 9*CELL (10 vertical + 10 horizontal)
+    const GRID = N * CELL;
+    const SIZE = GRID + THICK; // a bit of padding for the outer stroke
+
+    const DPR = 3; // high-res for crisp print
+    const canvas = document.createElement('canvas');
+    canvas.width  = SIZE * DPR;
+    canvas.height = SIZE * DPR;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(DPR, DPR);
+
+    // White background
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+
+    // Grid lines
+    for (let i = 0; i <= N; i++) {
+      const isBox = i % 3 === 0;
+      const lw = isBox ? THICK : THIN;
+      const color = isBox ? '#111' : '#aaa';
+      const pos = THICK / 2 + i * CELL; // offset by half outer stroke
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lw;
+
+      // horizontal
+      ctx.beginPath();
+      ctx.moveTo(THICK / 2, pos);
+      ctx.lineTo(THICK / 2 + GRID, pos);
+      ctx.stroke();
+
+      // vertical
+      ctx.beginPath();
+      ctx.moveTo(pos, THICK / 2);
+      ctx.lineTo(pos, THICK / 2 + GRID);
+      ctx.stroke();
+    }
+
+    // Numbers
+    const fontSize = Math.round(CELL * 0.54);
+    ctx.font = `700 ${fontSize}px "Segoe UI", Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#1a1a1a';
+
+    for (let i = 0; i < 81; i++) {
+      if (board[i] !== null) {
+        const row = Math.floor(i / 9);
+        const col = i % 9;
+        const x = THICK / 2 + col * CELL + CELL / 2;
+        const y = THICK / 2 + row * CELL + CELL / 2;
+        ctx.fillText(board[i], x, y);
+      }
+    }
+
+    return canvas;
+  }
+
+  function printViaCanvas() {
+    if (!currentBoard) return;
+    const canvas = drawSudokuToCanvas(currentBoard);
+    const dataUrl = canvas.toDataURL('image/png');
+
+    const iframe = document.createElement('iframe');
+    Object.assign(iframe.style, {
+      position: 'fixed', top: '0', left: '0',
+      width: '0', height: '0', border: 'none', visibility: 'hidden'
+    });
+    document.body.appendChild(iframe);
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+  @page { margin: 0; size: auto; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #fff; }
+  body { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+  img { width: 90vmin; height: 90vmin; display: block; }
+</style>
+</head><body><img src="${dataUrl}"></body></html>`;
+
+    iframe.srcdoc = html;
+    iframe.addEventListener('load', () => {
+      iframe.contentWindow.print();
+      // remove after print dialog closes
+      iframe.contentWindow.addEventListener('afterprint', () => iframe.remove());
+    });
+  }
+
+  // ── Worker response ──
+  worker.onmessage = (e) => {
+    setLoading(false);
+    if (e.data.error) {
+      alert('生成數獨時發生錯誤：' + e.data.error);
+      return;
+    }
+    currentBoard = e.data.board;
+    currentDifficulty = e.data.difficulty;
+    const area = document.getElementById('puzzle-area');
+    area.innerHTML = '';
+    area.appendChild(buildPuzzleCard(currentBoard, currentDifficulty));
+
+    if (pending) {
+      const d = pending; pending = null;
+      dispatch(d);
+    }
+  };
+
+  function dispatch(difficulty) {
+    setLoading(true);
+    worker.postMessage({ difficulty });
+  }
+
+  function generatePuzzle() {
+    const difficulty = document.getElementById('difficulty').value;
+    if (btnGenerate.disabled) { pending = difficulty; return; }
+    dispatch(difficulty);
+  }
+
+  btnGenerate.addEventListener('click', generatePuzzle);
+  document.getElementById('btn-print').addEventListener('click', printViaCanvas);
+
+  generatePuzzle();
+</script>
+</body>
+</html>
