@@ -7,7 +7,7 @@
   <style>
     :root {
       --cell-size: min(9vw, 9vh, 58px);
-      --border-thin: 1px solid #aaa;
+      --border-thin: 1px solid #111;
       --border-thick: 3px solid #111;
       --font-cell: calc(var(--cell-size) * 0.54);
     }
@@ -144,8 +144,8 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: var(--font-cell);
-      font-weight: 700;
+      font-size: calc(var(--font-cell) * 1.4);
+      font-weight: 400;
       border-right: var(--border-thin);
       border-bottom: var(--border-thin);
       color: transparent;
