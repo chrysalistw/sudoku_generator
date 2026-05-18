@@ -273,7 +273,7 @@
     for (let i = 0; i <= N; i++) {
       const isBox = i % 3 === 0;
       const lw = isBox ? THICK : THIN;
-      const color = isBox ? '#111' : '#aaa';
+      const color = '#111';
       const pos = THICK / 2 + i * CELL; // offset by half outer stroke
 
       ctx.strokeStyle = color;
@@ -293,8 +293,8 @@
     }
 
     // Numbers
-    const fontSize = Math.round(CELL * 0.54);
-    ctx.font = `700 ${fontSize}px "Segoe UI", Arial, sans-serif`;
+    const fontSize = Math.round(CELL * 0.54 * 1.4);
+    ctx.font = `400 ${fontSize}px "Segoe UI", Arial, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#1a1a1a';
