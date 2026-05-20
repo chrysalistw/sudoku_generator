@@ -86,8 +86,16 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    #btn-clear { background: #e2e8f0; color: #475569; }
-    #btn-clear:hover { background: #cbd5e1; }
+    #count {
+      width: 56px;
+      padding: 8px 6px;
+      font-size: 0.95rem;
+      border: 1.5px solid #cbd5e1;
+      border-radius: 6px;
+      text-align: center;
+      color: #334155;
+    }
+    label[for="count"] { font-size: 0.95rem; color: #334155; }
 
     #btn-print { background: #0f766e; color: #fff; }
     #btn-print:hover { background: #0d9488; }
@@ -95,8 +103,9 @@
     /* ── Puzzle area ── */
     #puzzle-area {
       display: flex;
-      flex-direction: column;
-      align-items: center;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: flex-start;
       gap: 28px;
       padding: 28px 16px;
     }
@@ -178,6 +187,8 @@
       <option value="medium" selected>中等</option>
       <option value="hard">困難</option>
     </select>
+    <input type="number" id="count" min="1" max="20" value="1">
+    <label for="count">題</label>
     <button id="btn-generate">生成數獨</button>
     <button id="btn-print">列印</button>
   </div>
@@ -190,11 +201,13 @@
     easy: '簡單', medium: '中等', hard: '困難', expert: '專家', master: '大師'
   };
 
-  // Current board state for printing
-  let currentBoard = null;
-  let currentDifficulty = null;
+  // ── State ──
+  let boards = [];        // [{ board, difficulty }, ...]
+  let remaining = 0;      // 本批還需生成幾題
+  let batchTotal = 0;     // 本批總數
+  let batchDifficulty = '';
 
-  // ── Web Worker (runs generate() off the main thread) ──
+  // ── Web Worker ──
   const workerSrc = `
     import { generate } from 'https://esm.sh/sudoku-core@3.0.3';
     self.onmessage = (e) => {
@@ -212,12 +225,11 @@
   );
 
   const btnGenerate = document.getElementById('btn-generate');
-  let pending = null;
 
-  function setLoading(on) {
+  function setLoading(on, done = 0, total = 1) {
     btnGenerate.disabled = on;
     btnGenerate.innerHTML = on
-      ? '<span class="spinner"></span>生成中…'
+      ? `<span class="spinner"></span>生成中 ${done + 1}/${total}…`
       : '生成數獨';
   }
 
@@ -249,50 +261,32 @@
 
   // ── Canvas rendering for print ──
   function drawSudokuToCanvas(board) {
-    const CELL = 64;          // px per cell
+    const CELL = 64;
     const THIN = 1;
     const THICK = 3;
     const N = 9;
-    // Total size: outer border (thick/2 on each side) + 9 cells + 8 inner lines
-    // We draw lines at positions 0, CELL, 2*CELL ... 9*CELL (10 vertical + 10 horizontal)
     const GRID = N * CELL;
-    const SIZE = GRID + THICK; // a bit of padding for the outer stroke
+    const SIZE = GRID + THICK;
+    const DPR = 3;
 
-    const DPR = 3; // high-res for crisp print
     const canvas = document.createElement('canvas');
     canvas.width  = SIZE * DPR;
     canvas.height = SIZE * DPR;
     const ctx = canvas.getContext('2d');
     ctx.scale(DPR, DPR);
 
-    // White background
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, SIZE, SIZE);
 
-    // Grid lines
     for (let i = 0; i <= N; i++) {
       const isBox = i % 3 === 0;
-      const lw = isBox ? THICK : THIN;
-      const color = '#111';
-      const pos = THICK / 2 + i * CELL; // offset by half outer stroke
-
-      ctx.strokeStyle = color;
-      ctx.lineWidth = lw;
-
-      // horizontal
-      ctx.beginPath();
-      ctx.moveTo(THICK / 2, pos);
-      ctx.lineTo(THICK / 2 + GRID, pos);
-      ctx.stroke();
-
-      // vertical
-      ctx.beginPath();
-      ctx.moveTo(pos, THICK / 2);
-      ctx.lineTo(pos, THICK / 2 + GRID);
-      ctx.stroke();
+      const pos = THICK / 2 + i * CELL;
+      ctx.strokeStyle = '#111';
+      ctx.lineWidth = isBox ? THICK : THIN;
+      ctx.beginPath(); ctx.moveTo(THICK / 2, pos); ctx.lineTo(THICK / 2 + GRID, pos); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(pos, THICK / 2); ctx.lineTo(pos, THICK / 2 + GRID); ctx.stroke();
     }
 
-    // Numbers
     const fontSize = Math.round(CELL * 0.54 * 1.4);
     ctx.font = `400 ${fontSize}px "Segoe UI", Arial, sans-serif`;
     ctx.textAlign = 'center';
@@ -303,19 +297,36 @@
       if (board[i] !== null) {
         const row = Math.floor(i / 9);
         const col = i % 9;
-        const x = THICK / 2 + col * CELL + CELL / 2;
-        const y = THICK / 2 + row * CELL + CELL / 2;
-        ctx.fillText(board[i], x, y);
+        ctx.fillText(board[i], THICK / 2 + col * CELL + CELL / 2, THICK / 2 + row * CELL + CELL / 2);
       }
     }
-
     return canvas;
   }
 
-  function printViaCanvas() {
-    if (!currentBoard) return;
-    const canvas = drawSudokuToCanvas(currentBoard);
-    const dataUrl = canvas.toDataURL('image/png');
+  // ── Print all boards via iframe ──
+  function printAllViaCanvas() {
+    if (!boards.length) return;
+
+    const pages = boards.map(({ board }) => {
+      const dataUrl = drawSudokuToCanvas(board).toDataURL('image/png');
+      return `<div class="page"><img src="${dataUrl}"></div>`;
+    }).join('');
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+  @page { margin: 0; size: auto; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: #fff; }
+  .page {
+    display: flex; justify-content: center; align-items: center;
+    width: 100vw; height: 100vh;
+    page-break-after: always; break-after: page;
+  }
+  .page:last-child { page-break-after: avoid; break-after: avoid; }
+  img { width: 90vmin; height: 90vmin; display: block; }
+</style>
+</head><body>${pages}</body></html>`;
 
     const iframe = document.createElement('iframe');
     Object.assign(iframe.style, {
@@ -323,60 +334,54 @@
       width: '0', height: '0', border: 'none', visibility: 'hidden'
     });
     document.body.appendChild(iframe);
-
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<style>
-  @page { margin: 0; size: auto; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; background: #fff; }
-  body { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-  img { width: 90vmin; height: 90vmin; display: block; }
-</style>
-</head><body><img src="${dataUrl}"></body></html>`;
-
     iframe.srcdoc = html;
     iframe.addEventListener('load', () => {
       iframe.contentWindow.print();
-      // remove after print dialog closes
       iframe.contentWindow.addEventListener('afterprint', () => iframe.remove());
     });
   }
 
   // ── Worker response ──
   worker.onmessage = (e) => {
-    setLoading(false);
     if (e.data.error) {
       alert('生成數獨時發生錯誤：' + e.data.error);
+      setLoading(false);
       return;
     }
-    currentBoard = e.data.board;
-    currentDifficulty = e.data.difficulty;
-    const area = document.getElementById('puzzle-area');
-    area.innerHTML = '';
-    area.appendChild(buildPuzzleCard(currentBoard, currentDifficulty));
 
-    if (pending) {
-      const d = pending; pending = null;
-      dispatch(d);
+    const { board, difficulty } = e.data;
+    boards.push({ board, difficulty });
+    document.getElementById('puzzle-area').appendChild(buildPuzzleCard(board, difficulty));
+
+    remaining--;
+    if (remaining > 0) {
+      setLoading(true, batchTotal - remaining, batchTotal);
+      worker.postMessage({ difficulty: batchDifficulty });
+    } else {
+      setLoading(false);
     }
   };
 
-  function dispatch(difficulty) {
-    setLoading(true);
+  // ── Generate batch ──
+  function generateBatch() {
+    if (btnGenerate.disabled) return;
+    const difficulty = document.getElementById('difficulty').value;
+    const count = Math.min(20, Math.max(1, parseInt(document.getElementById('count').value) || 1));
+
+    boards = [];
+    document.getElementById('puzzle-area').innerHTML = '';
+    remaining = count;
+    batchTotal = count;
+    batchDifficulty = difficulty;
+
+    setLoading(true, 0, count);
     worker.postMessage({ difficulty });
   }
 
-  function generatePuzzle() {
-    const difficulty = document.getElementById('difficulty').value;
-    if (btnGenerate.disabled) { pending = difficulty; return; }
-    dispatch(difficulty);
-  }
+  btnGenerate.addEventListener('click', generateBatch);
+  document.getElementById('btn-print').addEventListener('click', printAllViaCanvas);
 
-  btnGenerate.addEventListener('click', generatePuzzle);
-  document.getElementById('btn-print').addEventListener('click', printViaCanvas);
-
-  generatePuzzle();
+  generateBatch();
 </script>
 </body>
 </html>
